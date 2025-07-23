@@ -1,162 +1,184 @@
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
 
-// Definindo o tamanho máximo para nome e telefone
-#define TAM_NOME 50
-#define TAM_TEL 20
+// CÓDIGO DO PROFESSOR
+typedef struct tagFila {
+    char *buffer;
+    char *first;
+    char *last;
+    int size;
+    int sizeElement;
+    int maxElement;
+} TFila;
 
-// Estrutura de uma chamada
-typedef struct Chamada{
-    char nome[TAM_NOME];
-    char telefone[TAM_TEL];
-    struct Chamada* prox;
-}Chamada;
+// Cria a fila com o tamanho do elemento e o número máximo de elementos
+bool Fila_create(TFila *fila, int sizeElement, int max) {
+    if (fila == NULL || sizeElement == 0 || max == 0) return false;
 
-// Estrutura da fila
-typedef struct{
-    Chamada* inicio;
-    Chamada* fim;
-}Fila;
+    fila->buffer = malloc(sizeElement * max);
+    if (fila->buffer == NULL) return false;
 
-// Inicializa a fila (vazia)
-void inicializarFila(Fila* fila){
-    fila->inicio = NULL;
-    fila->fim = NULL;
+    fila->size = 0;
+    fila->sizeElement = sizeElement;
+    fila->maxElement = max;
+    fila->first = fila->buffer;
+    fila->last = fila->buffer;
+    return true;
+}
+
+// Libera a momória alocada para a fila
+void Fila_destroy(TFila *fila) {
+    free(fila->buffer);
+    fila->size = 0;
+    fila->sizeElement = 0;
+    fila->maxElement = 0;
+    fila->first = NULL;
+    fila->last = NULL;
+}
+
+// Adiciona um elemento na fila
+bool Fila_put(TFila *fila, char *data) {
+    if (fila == NULL || data == NULL || fila->size >= fila->maxElement) return false;
+    memcpy(fila->last, data, fila->sizeElement);
+    fila->last += fila->sizeElement;
+    if (fila->last >= fila->buffer + fila->maxElement * fila->sizeElement)
+        fila->last = fila->buffer;
+    fila->size++;
+    return true;
+}
+
+// Remove um elemento da fila e coloca na variavel data
+bool Fila_get(TFila *fila, char *data) {
+    if (fila == NULL || data == NULL || fila->size == 0) return false;
+    memcpy(data, fila->first, fila->sizeElement);
+    fila->first += fila->sizeElement;
+    if (fila->first >= fila->buffer + fila->maxElement * fila->sizeElement)
+        fila->first = fila->buffer;
+    fila->size--;
+    return true;
 }
 
 // Verifica se a fila está vazia
-int filaVazia(Fila* fila){
-return fila->inicio == NULL;
+bool Fila_isEmpty(TFila *fila) {
+    return fila->size == 0;
 }
 
-// Adiciona uma nova chamada à fila
-void adicionarChamada(Fila* fila, char* nome, char* telefone){
-    Chamada* nova = (Chamada*) malloc(sizeof(Chamada));
-    if(nova == NULL){
-        printf("Erro de alocacao de memoria.\n");
-    return;
-    }
-
-    strcpy(nova->nome, nome);
-    strcpy(nova->telefone, telefone);
-    nova->prox = NULL;
-
-    if(filaVazia(fila)){
-        fila->inicio = nova;
-    }else{
-        fila->fim->prox = nova;
-    }
-    fila->fim = nova;
-    printf("Chamada de %s adicionada a fila!\n", nome);
+// Verifica se a fila está cheia
+bool Fila_isFull(TFila *fila) {
+    return fila->size == fila->maxElement;
 }
 
-// Atende (remove) a primeira chamada da fila
-void atenderChamada(Fila* fila){
-    if(filaVazia(fila)){
-        printf("Nenhuma chamada na fila para atender.\n");
-    return;
-    }
-    Chamada* atendida = fila->inicio;
-    printf("Atendendo chamada de %s (%s)...\n", atendida->nome, atendida->telefone);
-
-    fila->inicio = atendida->prox;
-    if(fila->inicio == NULL){
-        fila->fim = NULL;
-    }
-    free(atendida);
+// Retorna o número de elementos na fila
+int Fila_size(TFila *fila) {
+    return fila->size;
 }
 
-// Lista todas as chamadas na fila
-void listarChamadas(Fila* fila){
-    if(filaVazia(fila)){
-        printf("A fila esta vazia.\n");
-    return;
-    }
-    printf("Chamadas na fila:\n");
-    Chamada* atual = fila->inicio;
-    int pos = 1;
-    while(atual != NULL){
-        printf("%d. %s (%s)\n", pos, atual->nome, atual->telefone);
-        atual = atual->prox;
-        pos++;
-    }
-}
+// ESTRUTURA DE CHAMADA
+typedef struct{
+    char nome[50];
+    char telefone[20];
+}Chamada;
 
-// Mostra quem será o próximo a ser atendido
-void verProximaChamada(Fila* fila){
-    if(filaVazia(fila)) {
-        printf("A fila esta vazia.\n");
-    return;
-    }
-    printf("Proxima chamada: %s (%s)\n", fila->inicio->nome, fila->inicio->telefone);
-}
-
-// Libera toda a memória alocada (quando encerrar o programa)
-void liberarFila(Fila* fila){
-    while(!filaVazia(fila)){
-        atenderChamada(fila);
-    }
-}
-
-// Menu principal
+// MENU PRINCIPAL
 void menu(){
-    printf("\n==== Central de Atendimento ====\n");
+    printf("\n=== Central de Atendimento ===\n");
     printf("1. Adicionar chamada\n");
     printf("2. Atender proxima chamada\n");
     printf("3. Ver proxima chamada\n");
-    printf("4. Listar todas as chamadas\n");
+    printf("4. Ver quantidade de chamadas\n");
     printf("5. Verificar se a fila esta vazia\n");
-    printf("6. Encerrar\n");
-    printf("Escolha uma opcao: ");
+    printf("6. Verificar se a fila esta cheia\n");
+    printf("7. Encerrar\n");
+    printf("Escolha: ");
 }
 
-// Função principal
-int main() {
-    Fila fila;
-    inicializarFila(&fila);
+void lerString(char *str, int tam){
+    fgets(str, tam, stdin);
+    str[strcspn(str, "\n")] = '\0'; // remove '\n'
+}
 
+// ADICIONA UMA CHAMADA Á FILA
+void adicionarChamada(TFila *fila){
+    if(Fila_isFull(fila)){
+        printf("A fila esta cheia!\n");
+    return;
+    }
+    Chamada c;
+    printf("Nome: ");
+    lerString(c.nome, 50);
+    printf("Telefone: ");
+    lerString(c.telefone, 20);
+    if(Fila_put(fila, (char*)&c))
+        printf("Chamada adicionada!\n");
+    else
+        printf("Erro ao adicionar chamada.\n");
+}
+
+// ATENDE(REMOVE) A PRIMEIRA CHAMADA DA FILA
+void atenderChamada(TFila *fila) {
+    if (Fila_isEmpty(fila)) {
+        printf("Nenhuma chamada para atender.\n");
+    return;
+    }
+    Chamada c;
+    if(Fila_get(fila, (char*)&c))
+        printf("Atendendo chamada de %s (%s)\n", c.nome, c.telefone);
+    else
+        printf("Erro ao atender chamada.\n");
+}
+
+// MOSTRA QUEM SERÁ O PRÓXIMO A SER ATENDIDO
+void verProxima(TFila *fila){
+    if(Fila_isEmpty(fila)){
+        printf("Fila vazia.\n");
+    return;
+    }
+    Chamada c;
+    memcpy(&c, fila->first, sizeof(Chamada));
+    printf("Proxima chamada: %s (%s)\n", c.nome, c.telefone);
+}
+
+// FUNÇÃO PRINCIPAL
+int main(){
+    TFila fila;
+    int capacidadeMaxima = 10;
+
+    if(!Fila_create(&fila, sizeof(Chamada), capacidadeMaxima)){
+        printf("Erro ao criar fila.\n");
+        return 1;
+    }
     int opcao;
-    char nome[TAM_NOME];
-    char telefone[TAM_TEL];
     do{
         menu();
         scanf("%d", &opcao);
-        getchar(); // Consumir o \n deixado pelo scanf
+        getchar(); // consumir o \n deixado pelo sacnf
         switch(opcao){
             case 1:
-                printf("Nome do cliente: ");
-                fgets(nome, TAM_NOME, stdin);
-                nome[strcspn(nome, "\n")] = '\0'; // Remover \n
-
-                printf("Telefone: ");
-                fgets(telefone, TAM_TEL, stdin);
-                telefone[strcspn(telefone, "\n")] = '\0';
-                adicionarChamada(&fila, nome, telefone);
+                adicionarChamada(&fila);
                 break;
-            case 2:
+            case 2: 
                 atenderChamada(&fila);
                 break;
             case 3:
-                verProximaChamada(&fila);
+                verProxima(&fila);
                 break;
             case 4:
-                listarChamadas(&fila);
+                printf("Total de chamadas: %d\n", Fila_size(&fila));
                 break;
-            case 5:
-                if(filaVazia(&fila))
-                    printf("A fila esta vazia.\n");
-                else
-                    printf("A fila contem chamadas.\n");
-                break;
-            case 6:
-                printf("Encerrando o sistema...\n");
-                liberarFila(&fila);
-                break;
-            default:
-                printf("Opcao invalida.\n");
+            case 5: 
+            printf(Fila_isEmpty(&fila) ? "Fila vazia.\n" : "Fila com chamadas.\n");
+            break;
+            case 6: 
+            printf(Fila_isFull(&fila) ? "Fila cheia.\n" : "Ainda ha espaco na fila.\n"); 
+            break;
+            case 7: printf("Encerrando...\n"); 
+            break;
+            default: printf("Opção inválida.\n");
         }
+    }while(opcao != 7);
 
-    }while(opcao != 6);
+    Fila_destroy(&fila);
 return 0;
 }
