@@ -18,7 +18,7 @@ typedef struct tagFila {
 
 typedef struct {
     char nome[50];
-    char ficha[20]; // <- Alterado
+    char ficha[20]; // ID sequencial como string
 } Chamada;
 
 typedef struct {
@@ -28,6 +28,7 @@ typedef struct {
 
 TFila fila;
 int capacidadeMaxima = 10;
+int proximo_id = 1; // contador global
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // === FUNÇÕES DA FILA ===
@@ -85,7 +86,7 @@ int Fila_size(TFila *fila) {
     return fila->size;
 }
 
-// === NOVA FUNÇÃO: Lista os elementos da fila como JSON ===
+// === CONVERTE A FILA PARA JSON ===
 json_t *Fila_to_json(TFila *fila) {
     json_t *array = json_array();
     if (!fila || fila->size == 0) return array;
@@ -107,7 +108,7 @@ json_t *Fila_to_json(TFila *fila) {
     return array;
 }
 
-// === API HANDLER ===
+// === HANDLER ===
 static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
                                    const char *url, const char *method,
                                    const char *version, const char *upload_data,
@@ -161,10 +162,10 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
             return ret;
         }
 
-        const char *nome, *ficha;
-        if (json_unpack(root, "{s:s, s:s}", "nome", &nome, "ficha", &ficha) != 0) {
+        const char *nome;
+        if (json_unpack(root, "{s:s}", "nome", &nome) != 0) {
             json_decref(root);
-            const char *err = "{\"error\":\"Campos inválidos\"}";
+            const char *err = "{\"error\":\"Campo 'nome' obrigatório\"}";
             response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
             MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
             MHD_add_response_header(response, "Content-Type", "application/json");
@@ -176,24 +177,37 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
 
         Chamada nova;
         strncpy(nova.nome, nome, sizeof(nova.nome) - 1);
-        strncpy(nova.ficha, ficha, sizeof(nova.ficha) - 1);
 
-        bool success;
         pthread_mutex_lock(&mutex);
-        success = Fila_put(&fila, (char *)&nova);
+        snprintf(nova.ficha, sizeof(nova.ficha), "%d", proximo_id++);
+        bool success = Fila_put(&fila, (char *)&nova);
         pthread_mutex_unlock(&mutex);
         json_decref(root);
 
-        const char *resposta = success ? "{\"status\":\"Chamada adicionada\"}" : "{\"error\":\"Fila cheia\"}";
-        int status_code = success ? MHD_HTTP_CREATED : MHD_HTTP_CONFLICT;
+        if (success) {
+            json_t *res = json_object();
+            json_object_set_new(res, "status", json_string("Chamada adicionada"));
+            json_object_set_new(res, "ficha", json_string(nova.ficha));
+            char *json_str = json_dumps(res, 0);
+            json_decref(res);
 
-        response = MHD_create_response_from_buffer(strlen(resposta), (void *)resposta, MHD_RESPMEM_PERSISTENT);
-        MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
-        MHD_add_response_header(response, "Content-Type", "application/json");
-        ret = MHD_queue_response(connection, status_code, response);
-        MHD_destroy_response(response);
-        free(reqData); *con_cls = NULL;
-        return ret;
+            response = MHD_create_response_from_buffer(strlen(json_str), json_str, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_CREATED, response);
+            MHD_destroy_response(response);
+            free(reqData); *con_cls = NULL;
+            return ret;
+        } else {
+            const char *msg = "{\"error\":\"Fila cheia\"}";
+            response = MHD_create_response_from_buffer(strlen(msg), (void *)msg, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_CONFLICT, response);
+            MHD_destroy_response(response);
+            free(reqData); *con_cls = NULL;
+            return ret;
+        }
     }
 
     // === DELETE /chamadas/proxima ===
@@ -229,7 +243,7 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
         }
     }
 
-    // === NOVO: GET /chamadas/mostrar_fila ===
+    // === GET /chamadas/mostrar_fila ===
     if (strcmp(method, "GET") == 0 && strcmp(url, "/chamadas/mostrar_fila") == 0) {
         pthread_mutex_lock(&mutex);
         json_t *array = Fila_to_json(&fila);
@@ -246,7 +260,7 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
         return ret;
     }
 
-    // Rota desconhecida
+    // ROTA DESCONHECIDA
     const char *msg = "{\"error\":\"Bad request\"}";
     response = MHD_create_response_from_buffer(strlen(msg), (void *)msg, MHD_RESPMEM_PERSISTENT);
     MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
