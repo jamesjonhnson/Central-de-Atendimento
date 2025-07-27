@@ -2,8 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <microhttpd.h>
+#include <jansson.h>
+#include <pthread.h>
 
-// CÓDIGO DO PROFESSOR
+// === ESTRUTURA DE FILA E CHAMADA ===
 typedef struct tagFila {
     char *buffer;
     char *first;
@@ -13,13 +16,25 @@ typedef struct tagFila {
     int maxElement;
 } TFila;
 
-// Cria a fila com o tamanho do elemento e o número máximo de elementos
+typedef struct {
+    char nome[50];
+    char telefone[20];
+} Chamada;
+
+typedef struct {
+    char buffer[4096];
+    size_t offset;
+} RequestData;
+
+TFila fila;
+int capacidadeMaxima = 10;
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// === FUNÇÕES DA FILA ===
 bool Fila_create(TFila *fila, int sizeElement, int max) {
-    if (fila == NULL || sizeElement == 0 || max == 0) return false;
-
+    if (!fila || sizeElement == 0 || max == 0) return false;
     fila->buffer = malloc(sizeElement * max);
-    if (fila->buffer == NULL) return false;
-
+    if (!fila->buffer) return false;
     fila->size = 0;
     fila->sizeElement = sizeElement;
     fila->maxElement = max;
@@ -28,9 +43,9 @@ bool Fila_create(TFila *fila, int sizeElement, int max) {
     return true;
 }
 
-// Libera a momória alocada para a fila
 void Fila_destroy(TFila *fila) {
     free(fila->buffer);
+    fila->buffer = NULL;
     fila->size = 0;
     fila->sizeElement = 0;
     fila->maxElement = 0;
@@ -38,9 +53,8 @@ void Fila_destroy(TFila *fila) {
     fila->last = NULL;
 }
 
-// Adiciona um elemento na fila
 bool Fila_put(TFila *fila, char *data) {
-    if (fila == NULL || data == NULL || fila->size >= fila->maxElement) return false;
+    if (!fila || !data || fila->size >= fila->maxElement) return false;
     memcpy(fila->last, data, fila->sizeElement);
     fila->last += fila->sizeElement;
     if (fila->last >= fila->buffer + fila->maxElement * fila->sizeElement)
@@ -49,9 +63,8 @@ bool Fila_put(TFila *fila, char *data) {
     return true;
 }
 
-// Remove um elemento da fila e coloca na variavel data
 bool Fila_get(TFila *fila, char *data) {
-    if (fila == NULL || data == NULL || fila->size == 0) return false;
+    if (!fila || !data || fila->size == 0) return false;
     memcpy(data, fila->first, fila->sizeElement);
     fila->first += fila->sizeElement;
     if (fila->first >= fila->buffer + fila->maxElement * fila->sizeElement)
@@ -60,125 +73,183 @@ bool Fila_get(TFila *fila, char *data) {
     return true;
 }
 
-// Verifica se a fila está vazia
 bool Fila_isEmpty(TFila *fila) {
     return fila->size == 0;
 }
 
-// Verifica se a fila está cheia
 bool Fila_isFull(TFila *fila) {
     return fila->size == fila->maxElement;
 }
 
-// Retorna o número de elementos na fila
 int Fila_size(TFila *fila) {
     return fila->size;
 }
 
-// ESTRUTURA DE CHAMADA
-typedef struct{
-    char nome[50];
-    char telefone[20];
-}Chamada;
+// === API HANDLER CORRIGIDO ===
+static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
+                       const char *url, const char *method,
+                       const char *version, const char *upload_data,
+                       size_t *upload_data_size, void **con_cls)
+{
+    struct MHD_Response *response;
+    enum MHD_Result ret;
 
-// MENU PRINCIPAL
-void menu(){
-    printf("\n=== Central de Atendimento ===\n");
-    printf("1. Adicionar chamada\n");
-    printf("2. Atender proxima chamada\n");
-    printf("3. Ver proxima chamada\n");
-    printf("4. Ver quantidade de chamadas\n");
-    printf("5. Verificar se a fila esta vazia\n");
-    printf("6. Verificar se a fila esta cheia\n");
-    printf("7. Encerrar\n");
-    printf("Escolha: ");
-}
-
-void lerString(char *str, int tam){
-    fgets(str, tam, stdin);
-    str[strcspn(str, "\n")] = '\0'; // remove '\n'
-}
-
-// ADICIONA UMA CHAMADA Á FILA
-void adicionarChamada(TFila *fila){
-    if(Fila_isFull(fila)){
-        printf("A fila esta cheia!\n");
-    return;
+    // Preflight CORS
+    if (strcmp(method, "OPTIONS") == 0) {
+        response = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
+        MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+        MHD_add_response_header(response, "Access-Control-Allow-Methods", "POST, GET, OPTIONS, DELETE");
+        MHD_add_response_header(response, "Access-Control-Allow-Headers", "Content-Type");
+        ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+        MHD_destroy_response(response);
+        return ret;
     }
-    Chamada c;
-    printf("Nome: ");
-    lerString(c.nome, 50);
-    printf("Telefone: ");
-    lerString(c.telefone, 20);
-    if(Fila_put(fila, (char*)&c))
-        printf("Chamada adicionada!\n");
-    else
-        printf("Erro ao adicionar chamada.\n");
-}
 
-// ATENDE(REMOVE) A PRIMEIRA CHAMADA DA FILA
-void atenderChamada(TFila *fila) {
-    if (Fila_isEmpty(fila)) {
-        printf("Nenhuma chamada para atender.\n");
-    return;
+    // Aloca memória para a requisição
+    if (*con_cls == NULL) {
+        RequestData *data = calloc(1, sizeof(RequestData));
+        *con_cls = data;
+        return MHD_YES;
     }
-    Chamada c;
-    if(Fila_get(fila, (char*)&c))
-        printf("Atendendo chamada de %s (%s)\n", c.nome, c.telefone);
-    else
-        printf("Erro ao atender chamada.\n");
-}
 
-// MOSTRA QUEM SERÁ O PRÓXIMO A SER ATENDIDO
-void verProxima(TFila *fila){
-    if(Fila_isEmpty(fila)){
-        printf("Fila vazia.\n");
-    return;
-    }
-    Chamada c;
-    memcpy(&c, fila->first, sizeof(Chamada));
-    printf("Proxima chamada: %s (%s)\n", c.nome, c.telefone);
-}
+    RequestData *reqData = *con_cls;
 
-// FUNÇÃO PRINCIPAL
-int main(){
-    TFila fila;
-    int capacidadeMaxima = 10;
-
-    if(!Fila_create(&fila, sizeof(Chamada), capacidadeMaxima)){
-        printf("Erro ao criar fila.\n");
-        return 1;
-    }
-    int opcao;
-    do{
-        menu();
-        scanf("%d", &opcao);
-        getchar(); // consumir o \n deixado pelo sacnf
-        switch(opcao){
-            case 1:
-                adicionarChamada(&fila);
-                break;
-            case 2: 
-                atenderChamada(&fila);
-                break;
-            case 3:
-                verProxima(&fila);
-                break;
-            case 4:
-                printf("Total de chamadas: %d\n", Fila_size(&fila));
-                break;
-            case 5: 
-            printf(Fila_isEmpty(&fila) ? "Fila vazia.\n" : "Fila com chamadas.\n");
-            break;
-            case 6: 
-            printf(Fila_isFull(&fila) ? "Fila cheia.\n" : "Ainda ha espaco na fila.\n"); 
-            break;
-            case 7: printf("Encerrando...\n"); 
-            break;
-            default: printf("Opção inválida.\n");
+    // POST /chamadas
+    if (strcmp(method, "POST") == 0 && strcmp(url, "/chamadas") == 0) {
+        if (*upload_data_size > 0) {
+            // Copia dados recebidos
+            if (reqData->offset + *upload_data_size >= sizeof(reqData->buffer)) {
+                *upload_data_size = 0;
+                return MHD_NO;
+            }
+            memcpy(reqData->buffer + reqData->offset, upload_data, *upload_data_size);
+            reqData->offset += *upload_data_size;
+            *upload_data_size = 0;
+            return MHD_YES;
         }
-    }while(opcao != 7);
 
+        // Fim do upload, processar JSON
+        reqData->buffer[reqData->offset] = '\0';
+        json_error_t error;
+        json_t *root = json_loads(reqData->buffer, 0, &error);
+        if (!root) {
+            printf("Erro JSON: %s (linha %d, coluna %d)\n", error.text, error.line, error.column);
+            const char *err = "{\"error\":\"JSON inválido\"}";
+            response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+            MHD_destroy_response(response);
+            free(reqData);
+            *con_cls = NULL;
+            return ret;
+        }
+
+        const char *nome, *telefone;
+        if (json_unpack(root, "{s:s, s:s}", "nome", &nome, "telefone", &telefone) != 0) {
+            json_decref(root);
+            const char *err = "{\"error\":\"Campos inválidos\"}";
+            response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+            MHD_destroy_response(response);
+            free(reqData);
+            *con_cls = NULL;
+            return ret;
+        }
+
+        Chamada nova;
+        strncpy(nova.nome, nome, sizeof(nova.nome) - 1);
+        strncpy(nova.telefone, telefone, sizeof(nova.telefone) - 1);
+
+        bool success;
+        pthread_mutex_lock(&mutex);
+        success = Fila_put(&fila, (char *)&nova);
+        pthread_mutex_unlock(&mutex);
+
+        json_decref(root);
+
+        if (!success) {
+            const char *err = "{\"error\":\"Fila cheia\"}";
+            response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_CONFLICT, response);
+            MHD_destroy_response(response);
+        } else {
+            const char *ok = "{\"status\":\"Chamada adicionada\"}";
+            response = MHD_create_response_from_buffer(strlen(ok), (void *)ok, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_CREATED, response);
+            MHD_destroy_response(response);
+        }
+
+        free(reqData);
+        *con_cls = NULL;
+        return ret;
+    }
+
+    // DELETE /chamadas/proxima
+    if (strcmp(method, "DELETE") == 0 && strcmp(url, "/chamadas/proxima") == 0) {
+        Chamada atendida;
+        bool success;
+
+        pthread_mutex_lock(&mutex);
+        success = Fila_get(&fila, (char *)&atendida);
+        pthread_mutex_unlock(&mutex);
+
+        if (success) {
+            json_t *res = json_object();
+            json_object_set_new(res, "nome", json_string(atendida.nome));
+            json_object_set_new(res, "telefone", json_string(atendida.telefone));
+            char *json_str = json_dumps(res, 0);
+            json_decref(res);
+
+            response = MHD_create_response_from_buffer(strlen(json_str), json_str, MHD_RESPMEM_MUST_FREE);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+            MHD_destroy_response(response);
+            return ret;
+        } else {
+            const char *msg = "{\"error\":\"Fila vazia\"}";
+            response = MHD_create_response_from_buffer(strlen(msg), (void *)msg, MHD_RESPMEM_PERSISTENT);
+            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+            MHD_add_response_header(response, "Content-Type", "application/json");
+            ret = MHD_queue_response(connection, MHD_HTTP_NO_CONTENT, response);
+            MHD_destroy_response(response);
+            return ret;
+        }
+    }
+
+    // Rota desconhecida
+    const char *msg = "{\"error\":\"Bad request\"}";
+    response = MHD_create_response_from_buffer(strlen(msg), (void *)msg, MHD_RESPMEM_PERSISTENT);
+    MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+    MHD_add_response_header(response, "Content-Type", "application/json");
+    ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
+    MHD_destroy_response(response);
+    return ret;
+}
+
+// === MAIN ===
+int main() {
+    Fila_create(&fila, sizeof(Chamada), capacidadeMaxima);
+    pthread_mutex_init(&mutex, NULL);
+
+    struct MHD_Daemon *daemon;
+    daemon = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION, 8080,
+                              NULL, NULL, &api_handler, NULL,
+                              MHD_OPTION_END);
+    if (!daemon) return 1;
+
+    printf("API rodando na porta 8080\n");
+    getchar(); // Mantém servidor ativo
+
+    MHD_stop_daemon(daemon);
     Fila_destroy(&fila);
-return 0;
+    pthread_mutex_destroy(&mutex);
+    return 0;
 }
