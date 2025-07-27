@@ -18,7 +18,7 @@ typedef struct tagFila {
 
 typedef struct {
     char nome[50];
-    char telefone[20];
+    char ficha[20]; // <- Alterado
 } Chamada;
 
 typedef struct {
@@ -85,16 +85,37 @@ int Fila_size(TFila *fila) {
     return fila->size;
 }
 
-// === API HANDLER CORRIGIDO ===
+// === NOVA FUNÇÃO: Lista os elementos da fila como JSON ===
+json_t *Fila_to_json(TFila *fila) {
+    json_t *array = json_array();
+    if (!fila || fila->size == 0) return array;
+
+    char *ptr = fila->first;
+    for (int i = 0; i < fila->size; i++) {
+        Chamada *c = (Chamada *)ptr;
+
+        json_t *obj = json_object();
+        json_object_set_new(obj, "nome", json_string(c->nome));
+        json_object_set_new(obj, "ficha", json_string(c->ficha));
+        json_array_append_new(array, obj);
+
+        ptr += fila->sizeElement;
+        if (ptr >= fila->buffer + fila->maxElement * fila->sizeElement)
+            ptr = fila->buffer;
+    }
+
+    return array;
+}
+
+// === API HANDLER ===
 static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
-                       const char *url, const char *method,
-                       const char *version, const char *upload_data,
-                       size_t *upload_data_size, void **con_cls)
+                                   const char *url, const char *method,
+                                   const char *version, const char *upload_data,
+                                   size_t *upload_data_size, void **con_cls)
 {
     struct MHD_Response *response;
     enum MHD_Result ret;
 
-    // Preflight CORS
     if (strcmp(method, "OPTIONS") == 0) {
         response = MHD_create_response_from_buffer(0, NULL, MHD_RESPMEM_PERSISTENT);
         MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
@@ -105,7 +126,6 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
         return ret;
     }
 
-    // Aloca memória para a requisição
     if (*con_cls == NULL) {
         RequestData *data = calloc(1, sizeof(RequestData));
         *con_cls = data;
@@ -114,10 +134,9 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
 
     RequestData *reqData = *con_cls;
 
-    // POST /chamadas
+    // === POST /chamadas ===
     if (strcmp(method, "POST") == 0 && strcmp(url, "/chamadas") == 0) {
         if (*upload_data_size > 0) {
-            // Copia dados recebidos
             if (reqData->offset + *upload_data_size >= sizeof(reqData->buffer)) {
                 *upload_data_size = 0;
                 return MHD_NO;
@@ -128,25 +147,22 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
             return MHD_YES;
         }
 
-        // Fim do upload, processar JSON
         reqData->buffer[reqData->offset] = '\0';
         json_error_t error;
         json_t *root = json_loads(reqData->buffer, 0, &error);
         if (!root) {
-            printf("Erro JSON: %s (linha %d, coluna %d)\n", error.text, error.line, error.column);
             const char *err = "{\"error\":\"JSON inválido\"}";
             response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
             MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
             MHD_add_response_header(response, "Content-Type", "application/json");
             ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
             MHD_destroy_response(response);
-            free(reqData);
-            *con_cls = NULL;
+            free(reqData); *con_cls = NULL;
             return ret;
         }
 
-        const char *nome, *telefone;
-        if (json_unpack(root, "{s:s, s:s}", "nome", &nome, "telefone", &telefone) != 0) {
+        const char *nome, *ficha;
+        if (json_unpack(root, "{s:s, s:s}", "nome", &nome, "ficha", &ficha) != 0) {
             json_decref(root);
             const char *err = "{\"error\":\"Campos inválidos\"}";
             response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
@@ -154,44 +170,33 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
             MHD_add_response_header(response, "Content-Type", "application/json");
             ret = MHD_queue_response(connection, MHD_HTTP_BAD_REQUEST, response);
             MHD_destroy_response(response);
-            free(reqData);
-            *con_cls = NULL;
+            free(reqData); *con_cls = NULL;
             return ret;
         }
 
         Chamada nova;
         strncpy(nova.nome, nome, sizeof(nova.nome) - 1);
-        strncpy(nova.telefone, telefone, sizeof(nova.telefone) - 1);
+        strncpy(nova.ficha, ficha, sizeof(nova.ficha) - 1);
 
         bool success;
         pthread_mutex_lock(&mutex);
         success = Fila_put(&fila, (char *)&nova);
         pthread_mutex_unlock(&mutex);
-
         json_decref(root);
 
-        if (!success) {
-            const char *err = "{\"error\":\"Fila cheia\"}";
-            response = MHD_create_response_from_buffer(strlen(err), (void *)err, MHD_RESPMEM_PERSISTENT);
-            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
-            MHD_add_response_header(response, "Content-Type", "application/json");
-            ret = MHD_queue_response(connection, MHD_HTTP_CONFLICT, response);
-            MHD_destroy_response(response);
-        } else {
-            const char *ok = "{\"status\":\"Chamada adicionada\"}";
-            response = MHD_create_response_from_buffer(strlen(ok), (void *)ok, MHD_RESPMEM_PERSISTENT);
-            MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
-            MHD_add_response_header(response, "Content-Type", "application/json");
-            ret = MHD_queue_response(connection, MHD_HTTP_CREATED, response);
-            MHD_destroy_response(response);
-        }
+        const char *resposta = success ? "{\"status\":\"Chamada adicionada\"}" : "{\"error\":\"Fila cheia\"}";
+        int status_code = success ? MHD_HTTP_CREATED : MHD_HTTP_CONFLICT;
 
-        free(reqData);
-        *con_cls = NULL;
+        response = MHD_create_response_from_buffer(strlen(resposta), (void *)resposta, MHD_RESPMEM_PERSISTENT);
+        MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        ret = MHD_queue_response(connection, status_code, response);
+        MHD_destroy_response(response);
+        free(reqData); *con_cls = NULL;
         return ret;
     }
 
-    // DELETE /chamadas/proxima
+    // === DELETE /chamadas/proxima ===
     if (strcmp(method, "DELETE") == 0 && strcmp(url, "/chamadas/proxima") == 0) {
         Chamada atendida;
         bool success;
@@ -203,7 +208,7 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
         if (success) {
             json_t *res = json_object();
             json_object_set_new(res, "nome", json_string(atendida.nome));
-            json_object_set_new(res, "telefone", json_string(atendida.telefone));
+            json_object_set_new(res, "ficha", json_string(atendida.ficha));
             char *json_str = json_dumps(res, 0);
             json_decref(res);
 
@@ -222,6 +227,23 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *connection,
             MHD_destroy_response(response);
             return ret;
         }
+    }
+
+    // === NOVO: GET /chamadas/mostrar_fila ===
+    if (strcmp(method, "GET") == 0 && strcmp(url, "/chamadas/mostrar_fila") == 0) {
+        pthread_mutex_lock(&mutex);
+        json_t *array = Fila_to_json(&fila);
+        pthread_mutex_unlock(&mutex);
+
+        char *json_str = json_dumps(array, 0);
+        json_decref(array);
+
+        response = MHD_create_response_from_buffer(strlen(json_str), json_str, MHD_RESPMEM_MUST_FREE);
+        MHD_add_response_header(response, "Access-Control-Allow-Origin", "*");
+        MHD_add_response_header(response, "Content-Type", "application/json");
+        ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+        MHD_destroy_response(response);
+        return ret;
     }
 
     // Rota desconhecida
