@@ -274,13 +274,13 @@ static enum MHD_Result api_handler(void *cls, struct MHD_Connection *conn,
     }
 }
 
-// === MAIN === aaaaaaaaaaaaaaa
+// === MAIN ===
 int main() {
     Fila_create(&fila, sizeof(Chamada), capacidadeMaxima);
     pthread_mutex_init(&mutex, NULL);
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
-        MHD_USE_THREAD_PER_CONNECTION, 8080,
+        MHD_USE_THREAD_PER_CONNECTION, 80,
         NULL, NULL, &api_handler, NULL,
         MHD_OPTION_END
     );
