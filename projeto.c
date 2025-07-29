@@ -280,7 +280,7 @@ int main() {
     pthread_mutex_init(&mutex, NULL);
 
     struct MHD_Daemon *daemon = MHD_start_daemon(
-        MHD_USE_THREAD_PER_CONNECTION, 80,
+        MHD_USE_THREAD_PER_CONNECTION, 8080,
         NULL, NULL, &api_handler, NULL,
         MHD_OPTION_END
     );
